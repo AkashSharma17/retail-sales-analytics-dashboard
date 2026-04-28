@@ -1,9 +1,27 @@
-
-import matplotlib.dates as mdates
-import matplotlib.pyplot as plt
+import logging
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+
 from matplotlib.ticker import FuncFormatter
+
+
+# ---------------------------------------------------
+# LOGGING CONFIGURATION
+# ---------------------------------------------------
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------
+# MATPLOTLIB SETTINGS
+# ---------------------------------------------------
 
 plt.rcParams.update({
     "figure.figsize": (9, 4.5),
@@ -17,527 +35,456 @@ plt.rcParams.update({
 })
 
 
+# ---------------------------------------------------
+# HELPER FUNCTION
+# ---------------------------------------------------
+
 def currency_k(x, pos):
-    if x >= 1e6:
-        return f'{x/1e6:.1f}M'
-    elif x >= 1e3:
-        return f'{x/1e3:.0f}K'
+
+    if x >= 1_000_000:
+        return f"{x/1_000_000:.1f}M"
+
+    elif x >= 1_000:
+        return f"{x/1_000:.0f}K"
+
     else:
-        return f'{x:.0f}'
+        return f"{x:.0f}"
 
 
-np.random.seed(2026)
-
+# ---------------------------------------------------
+# MAIN CLASS
+# ---------------------------------------------------
 
 class RetailAnalyticsDashboard:
 
-    def __init__(self, data: dict):
-        self.df = pd.DataFrame(data)
-        self.df["Date"] = pd.to_datetime(self.df["Date"], errors="coerce")
-        self.df.dropna(subset=["Date"], inplace=True)
-        self.df.set_index("Date", inplace=True)
+    # ---------------------------------------------------
+    # INIT
+    # ---------------------------------------------------
+
+    def __init__(self, filepath):
+
+        logger.info("Loading Dataset")
+
+        self.df = pd.read_csv(filepath)
+
+        logger.info(f"Dataset Loaded | Shape: {self.df.shape}")
+
+        self.df["order_date"] = pd.to_datetime(
+            self.df["order_date"],
+            errors="coerce"
+        )
+
+        invalid_dates = self.df["order_date"].isna().sum()
+
+        if invalid_dates > 0:
+            logger.warning(f"Invalid Dates Found: {invalid_dates}")
+
+        self.df.dropna(subset=["order_date"], inplace=True)
+
+        self.df.set_index("order_date", inplace=True)
+
+        logger.info("Date Conversion Successful")
+
+        # Better pipeline flow
+        self.data_cleaning()
+
         self.feature_engineering()
 
-    # -------------------------
-    # EDA
-    # -------------------------
+    # ---------------------------------------------------
+    # BASIC EDA
+    # ---------------------------------------------------
 
     def basic_eda(self):
+
+        logger.info("Running Basic EDA")
+
         print("\nTop 5 Rows:\n", self.df.head())
+
+        print("\nDataset Shape:", self.df.shape)
+
         print("\nDuplicate Rows:", self.df.duplicated().sum())
+
         print("\nMissing Values:\n", self.df.isna().sum())
+
         print("\nData Types:\n", self.df.dtypes)
-        print("\nUnits Sold Summary:\n", self.df["Units_Sold"].describe())
-        print("\nPrice Summary:\n", self.df["Price"].describe())
-        print("\nCost Summary:\n", self.df["Cost"].describe())
 
-    def professional_eda(self):
-        result = {}
-        result["Top 5 Rows"] = self.df.head()
-        result["Shape"] = self.df.shape
-        result["Duplicate Rows"] = self.df.duplicated().sum()
-        result["Missing Values"] = self.df.isna().sum()
-        result["Data Types"] = self.df.dtypes
+        print("\nRevenue Summary:\n", self.df["Revenue"].describe())
 
-        numeric_cols = ["Units_Sold", "Price", "Cost", "Revenue", "Profit", "Profit_Margin"]
-        existing_cols = [c for c in numeric_cols if c in self.df.columns]
-        result["Numeric Summary"] = self.df[existing_cols].describe()
-
-        if "Store" in self.df.columns:
-            result["Store Revenue Summary"] = (
-                self.df.groupby("Store")["Revenue"].agg(["max", "min", "mean"])
-            )
-
-        return result
-
-    # -------------------------
+    # ---------------------------------------------------
     # DATA CLEANING
-    # -------------------------
+    # ---------------------------------------------------
 
-    def data_cleaning(self, drop_invalid_price=False):
-        self.df = self.df[self.df["Units_Sold"] >= 0]
-        self.df["Invalid_Price"] = np.where(self.df["Price"] < self.df["Cost"], 1, 0)
+    def data_cleaning(self):
 
-        if drop_invalid_price:
-            self.df = self.df[self.df["Invalid_Price"] == 0]
+        logger.info("Starting Data Cleaning")
+
+        before_rows = len(self.df)
+
+        # Remove Negative Quantity
+        self.df = self.df[self.df["quantity"] >= 0]
+
+        logger.info("Negative Quantities Removed")
+
+        # Remove Duplicates
+        duplicates = self.df.duplicated().sum()
 
         self.df.drop_duplicates(inplace=True)
 
-    # -------------------------
-    # FEATURE ENGINEERING
-    # -------------------------
+        logger.info(f"Duplicate Rows Removed: {duplicates}")
 
-    def feature_engineering(self, high_sales_threshold=6000):
-        self.df["Revenue"] = self.df["Units_Sold"] * self.df["Price"]
-        self.df["Total_Cost"] = self.df["Units_Sold"] * self.df["Cost"]
-        self.df["Profit"] = self.df["Revenue"] - self.df["Total_Cost"]
+        # Fill Missing Discount
+        missing_discount = self.df["discount"].isna().sum()
 
-        self.df["Profit_Margin"] = np.where(
-            self.df["Revenue"] == 0,
-            0,
-            self.df["Profit"] / self.df["Revenue"] * 100
+        if missing_discount > 0:
+
+            logger.info(f"Missing Discounts Found: {missing_discount}")
+
+            self.df["discount"] = self.df["discount"].fillna(0)
+
+            logger.info("Missing Discounts Filled")
+
+        else:
+
+            logger.info("No Missing Discounts Found")
+           
+
+        after_rows = len(self.df)
+
+        logger.info(
+            f"Cleaning Completed | Before: {before_rows} | After: {after_rows}"
         )
 
-        self.df["Day_Name"] = self.df.index.day_name()
-        self.df["Day_Number"] = self.df.index.dayofweek
-        self.df["Is_Weekend"] = np.where(self.df["Day_Number"] >= 5, 1, 0)
-        self.df["High_Sales"] = np.where(self.df["Revenue"] > high_sales_threshold, 1, 0)
-        self.df["Loss_Flag"] = np.where(self.df["Profit"] < 0, 1, 0)
+    # ---------------------------------------------------
+    # FEATURE ENGINEERING
+    # ---------------------------------------------------
 
-    # -------------------------
+    def feature_engineering(self):
+
+        logger.info("Running Feature Engineering")
+
+        # Revenue
+        self.df["Revenue"] = (
+            self.df["price"] *
+            self.df["quantity"] *
+            (1 - self.df["discount"])
+        )
+
+        # Day Features
+        self.df["Day_Name"] = self.df.index.day_name()
+
+        self.df["Month"] = self.df.index.month_name()
+
+        self.df["Is_Weekend"] = np.where(
+            self.df.index.dayofweek >= 5,
+            1,
+            0
+        )
+
+        logger.info("Feature Engineering Completed")
+
+    # ---------------------------------------------------
     # KPI DASHBOARD
-    # -------------------------
+    # ---------------------------------------------------
 
     @property
     def generate_kpi_dashboard(self):
 
+        logger.info("Generating KPI Dashboard")
+
         total_revenue = self.df["Revenue"].sum()
-        total_profit = self.df["Profit"].sum()
-        margin = (total_profit / total_revenue * 100) if total_revenue != 0 else 0
 
-        store_rev = self.df.groupby("Store", as_index=False)["Revenue"].sum()
-        product_rev = self.df.groupby("Product", as_index=False)["Revenue"].sum()
-        region_rev = self.df.groupby("Region", as_index=False)["Revenue"].sum()
+        total_orders = self.df["order_id"].nunique()
 
-        avg_daily_revenue = self.df["Revenue"].resample("D").sum().mean()
+        total_customers = self.df["customer_id"].nunique()
 
-        best_store = store_rev.loc[store_rev["Revenue"].idxmax()] if not store_rev.empty else None
-        worst_store = store_rev.loc[store_rev["Revenue"].idxmin()] if not store_rev.empty else None
+        avg_order_value = (
+            total_revenue / total_orders
+            if total_orders != 0
+            else 0
+        )
 
-        best_product = product_rev.loc[product_rev["Revenue"].idxmax()] if not product_rev.empty else None
-        worst_product = product_rev.loc[product_rev["Revenue"].idxmin()] if not product_rev.empty else None
+        best_region = (
+            self.df.groupby("region")["Revenue"]
+            .sum()
+            .idxmax()
+        )
 
-        best_region = region_rev.loc[region_rev["Revenue"].idxmax()] if not region_rev.empty else None
-        worst_region = region_rev.loc[region_rev["Revenue"].idxmin()] if not region_rev.empty else None
+        best_category = (
+            self.df.groupby("product_category")["Revenue"]
+            .sum()
+            .idxmax()
+        )
 
         return {
+
             "Total Revenue": round(total_revenue, 2),
-            "Total Profit": round(total_profit, 2),
-            "Overall Profit Margin (%)": round(margin, 2),
-            "Best Store": best_store["Store"] if best_store is not None else None,
-            "Best Store Revenue": round(best_store["Revenue"], 2) if best_store is not None else None,
-            "Worst Store": worst_store["Store"] if worst_store is not None else None,
-            "Worst Store Revenue": round(worst_store["Revenue"], 2) if worst_store is not None else None,
-            "Best Product": best_product["Product"] if best_product is not None else None,
-            "Best Product Revenue": round(best_product["Revenue"], 2) if best_product is not None else None,
-            "Worst Product": worst_product["Product"] if worst_product is not None else None,
-            "Worst Product Revenue": round(worst_product["Revenue"], 2) if worst_product is not None else None,
-            "Best Region": best_region["Region"] if best_region is not None else None,
-            "Best Region Revenue": round(best_region["Revenue"], 2) if best_region is not None else None,
-            "Worst Region": worst_region["Region"] if worst_region is not None else None,
-            "Worst Region Revenue": round(worst_region["Revenue"], 2) if worst_region is not None else None,
-            "Average Daily Revenue": round(avg_daily_revenue, 2),
+
+            "Total Orders": total_orders,
+
+            "Total Customers": total_customers,
+
+            "Average Order Value": round(avg_order_value, 2),
+
+            "Best Region": best_region,
+
+            "Best Product Category": best_category
         }
 
-    # -------------------------
-    # TIME SERIES
-    # -------------------------
+    # ---------------------------------------------------
+    # TIME SERIES ANALYSIS
+    # ---------------------------------------------------
 
     def time_series_analysis(self):
+
+        logger.info("Running Time Series Analysis")
+
         daily = self.df["Revenue"].resample("D").sum()
+
         rolling = daily.rolling(7).mean()
+
         monthly = daily.resample("ME").sum()
+
+        logger.info("Time Series Analysis Completed")
+
         return daily, rolling, monthly
 
+    # ---------------------------------------------------
+    # TREND DIRECTION
+    # ---------------------------------------------------
+
     def trend_direction(self):
+
         daily = self.df["Revenue"].resample("D").sum()
+
         diff = daily.diff().mean()
 
         if diff > 0:
-            return "Increasing"
+            trend = "Increasing"
+
         elif diff < 0:
-            return "Decreasing"
+            trend = "Decreasing"
+
         else:
-            return "Stable"
+            trend = "Stable"
 
-    # -------------------------
-    # VISUALIZATIONS
-    # -------------------------
+        logger.info(f"Trend Direction: {trend}")
 
-    def daily_rolling_plot(self):
+        return trend
+
+    # ---------------------------------------------------
+    # REVENUE TREND PLOT
+    # ---------------------------------------------------
+
+    def revenue_trend_plot(self):
+
+        logger.info("Generating Revenue Trend Plot")
+
         daily = self.df["Revenue"].resample("D").sum()
+
         rolling = daily.rolling(7).mean()
 
         fig, ax = plt.subplots(figsize=(10, 5))
-        ax.plot(daily.index, daily, alpha=0.35, linewidth=1, label="Daily Revenue")
-        ax.plot(rolling.index, rolling, linewidth=2.5, label="7-Day Rolling Avg")
 
-        peak_date = daily.idxmax()
-        peak_value = daily.max()
+        ax.plot(
+            daily.index,
+            daily,
+            alpha=0.4,
+            linewidth=1,
+            label="Daily Revenue"
+        )
 
-        ax.scatter(peak_date, peak_value, color="red", zorder=5)
-        ax.annotate("Peak", xy=(peak_date, peak_value),
-                    xytext=(0, 10), textcoords="offset points",
-                    ha="center", fontsize=9, color="red")
+        ax.plot(
+            rolling.index,
+            rolling,
+            linewidth=2.5,
+            label="7-Day Rolling Avg"
+        )
 
-        ax.set_title("Revenue Trend (Daily vs Rolling Average)", fontweight="bold")
+        ax.set_title(
+            "Revenue Trend Analysis",
+            fontweight="bold"
+        )
+
         ax.set_xlabel("Date")
+
         ax.set_ylabel("Revenue")
+
         ax.legend(frameon=False)
 
-        ax.yaxis.set_major_formatter(FuncFormatter(currency_k))
-        ax.xaxis.set_major_locator(mdates.AutoDateLocator())
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
+        ax.yaxis.set_major_formatter(
+            FuncFormatter(currency_k)
+        )
+
+        ax.xaxis.set_major_locator(
+            mdates.AutoDateLocator()
+        )
+
+        ax.xaxis.set_major_formatter(
+            mdates.DateFormatter("%b %d")
+        )
 
         fig.autofmt_xdate()
+
         plt.tight_layout()
+
         plt.show()
 
-    def store_revenue_plot(self):
-        store_rev = self.df.groupby("Store")["Revenue"].sum().sort_values()
-        fig, ax = plt.subplots(figsize=(8, 5))
-        ax.barh(store_rev.index, store_rev.values, color="#69b3a2", edgecolor="black")
-        ax.set_title("Total Revenue by Store", fontweight="bold")
-        ax.set_xlabel("Revenue")
-        ax.set_ylabel("Store")
-        ax.xaxis.set_major_formatter(FuncFormatter(currency_k))
-        ax.grid(axis="x", linestyle="--", alpha=0.6)
-        plt.tight_layout()
-        plt.show()
+        logger.info("Revenue Trend Plot Displayed")
 
-    def product_revenue_plot(self):
-        fig, ax = plt.subplots(figsize=(10, 5))
+    # ---------------------------------------------------
+    # REGION REVENUE PLOT
+    # ---------------------------------------------------
 
-        avg_rev = self.df.groupby("Product")["Revenue"].mean().sort_values(ascending=False)
-        top_products = avg_rev.head(2).index
+    def region_revenue_plot(self):
 
-        for product in self.df["Product"].unique():
-            daily = self.df[self.df["Product"] == product]["Revenue"].resample("D").sum()
-            if product in top_products:
-                ax.plot(daily.index, daily, linewidth=2.5, label=product)
-            else:
-                ax.plot(daily.index, daily, alpha=0.25, linewidth=1)
+        logger.info("Generating Region Revenue Plot")
 
-        ax.set_title("Product Revenue Trends (Top Performers Highlighted)", fontweight="bold")
-        ax.set_xlabel("Date")
-        ax.set_ylabel("Revenue")
-        ax.legend(frameon=False)
+        region_rev = (
+            self.df.groupby("region")["Revenue"]
+            .sum()
+            .sort_values()
+        )
 
-        ax.yaxis.set_major_formatter(FuncFormatter(currency_k))
-        ax.xaxis.set_major_locator(mdates.AutoDateLocator())
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
-        fig.autofmt_xdate()
-        plt.tight_layout()
-        plt.show()
-
-    def profit_margin_histogram(self):
         fig, ax = plt.subplots(figsize=(7, 4))
-        ax.hist(self.df["Profit_Margin"], bins=8, color="#ffb347", edgecolor='black')
-        ax.set_title("Profit Margin Distribution", fontweight="bold")
-        ax.set_xlabel("Profit Margin (%)")
-        ax.set_ylabel("Frequency")
-        ax.grid(axis='y', linestyle='--', alpha=0.6)
+
+        ax.barh(
+            region_rev.index,
+            region_rev.values
+        )
+
+        ax.set_title(
+            "Revenue by Region",
+            fontweight="bold"
+        )
+
+        ax.set_xlabel("Revenue")
+
+        ax.xaxis.set_major_formatter(
+            FuncFormatter(currency_k)
+        )
+
         plt.tight_layout()
+
         plt.show()
 
-    def monthly_revenue_plot(self):
-        monthly = self.df["Revenue"].resample("ME").sum()
-        fig, ax = plt.subplots(figsize=(9, 5))
-        ax.plot(monthly.index, monthly, linewidth=2.5, color="#00bfff")
-        ax.set_title("Monthly Revenue Trend", fontweight="bold")
-        ax.set_xlabel("Month")
+        logger.info("Region Revenue Plot Displayed")
+
+    # ---------------------------------------------------
+    # TOP PRODUCT CATEGORIES
+    # ---------------------------------------------------
+
+    def top_categories_plot(self):
+
+        logger.info("Generating Product Category Plot")
+
+        category_rev = (
+            self.df.groupby("product_category")["Revenue"]
+            .sum()
+            .sort_values(ascending=False)
+        )
+
+        fig, ax = plt.subplots(figsize=(8, 4))
+
+        ax.bar(
+            category_rev.index,
+            category_rev.values
+        )
+
+        ax.set_title(
+            "Top Product Categories",
+            fontweight="bold"
+        )
+
         ax.set_ylabel("Revenue")
-        ax.yaxis.set_major_formatter(FuncFormatter(currency_k))
-        ax.xaxis.set_major_locator(mdates.MonthLocator())
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %Y"))
-        fig.autofmt_xdate()
-        ax.grid(True, linestyle=":", alpha=0.6)
+
+        ax.yaxis.set_major_formatter(
+            FuncFormatter(currency_k)
+        )
+
         plt.tight_layout()
+
         plt.show()
 
-    def weekend_vs_weekday_plot(self):
-        weekend = self.df.groupby("Is_Weekend")["Revenue"].sum().reindex([0, 1], fill_value=0)
-        labels = ["Weekday", "Weekend"]
-        fig, ax = plt.subplots(figsize=(6, 4))
-        ax.bar(labels, weekend.values, color="#ff7f0e", edgecolor="black")
-        ax.set_title("Revenue: Weekday vs Weekend", fontweight="bold")
-        ax.set_ylabel("Revenue")
-        ax.yaxis.set_major_formatter(FuncFormatter(currency_k))
-        ax.grid(axis='y', linestyle='--', alpha=0.6)
-        plt.tight_layout()
-        plt.show()
+        logger.info("Category Plot Displayed")
 
-    # -------------------------
-    # ADVANCED GROUPING INSIGHTS
-    # -------------------------
+    # ---------------------------------------------------
+    # CUSTOMER ANALYSIS
+    # ---------------------------------------------------
 
-    def advanced_grouping_insights(self):
-        results = {}
-
-        results["Store_Product_Performance"] = (
-            self.df.groupby(["Store", "Product"]).agg(
-                Revenue=("Revenue", "sum"),
-                Units_Sold=("Units_Sold", "sum")
-            ).sort_values(["Store", "Revenue"], ascending=[True, False])
-        )
-
-        results["Region_Performance"] = self.df.groupby("Region", as_index=False)["Revenue"].sum()
-
-        weekend = self.df.groupby("Is_Weekend", as_index=False).agg(
-            Total_Revenue=("Revenue", "sum"),
-            Total_Profit=("Profit", "sum")
-        )
-        total_rev = weekend["Total_Revenue"].sum()
-        weekend["Revenue_Percentage"] = weekend["Total_Revenue"] / total_rev * 100 if total_rev != 0 else 0
-        weekend["Day_Type"] = weekend["Is_Weekend"].map({0: "Weekday", 1: "Weekend"})
-        results["Weekend_vs_Weekday"] = weekend
-
-        top_products = (
-            self.df.groupby(["Store", "Product"])["Revenue"].sum()
-            .groupby(level=0, group_keys=False)
-            .nlargest(3)
-            .reset_index()
-        )
-        results["Top_3_Products_per_Store"] = top_products
-
-        lowest_margin = (
-            self.df.groupby("Region")
-            .apply(lambda x: x.loc[x["Profit_Margin"].idxmin(), ["Product", "Profit_Margin"]])
-            .reset_index(level=0)
-        )
-        results["Lowest_Margin_Product_per_Region"] = lowest_margin
-
-        results["Loss_Making_Products"] = self.df[self.df["Profit"] < 0][["Product", "Store", "Profit"]]
-
-        return results
-    
-    
     def customer_analysis(self):
-    
-        customer = self.df.groupby("Customer").agg(
-                total_spending=("Revenue", "sum"),
-                total_orders=("Revenue", "count"),
-                avg_order_value=("Revenue", "mean")
-            )
-    
-         # CLV (simple version)
-        customer["CLV"] = customer["total_spending"]
-    
-         # customer type
-        customer["type"] = np.where(customer["total_orders"] > 1, "Repeat", "New")
-    
-        print("\nCustomer Table:\n", customer)
-    
+
+        logger.info("Running Customer Analysis")
+
+        customer = self.df.groupby("customer_id").agg(
+
+            total_spending=("Revenue", "sum"),
+
+            total_orders=("order_id", "count"),
+
+            avg_order_value=("Revenue", "mean")
+        )
+
+        customer["Customer_Type"] = np.where(
+            customer["total_orders"] > 1,
+            "Repeat",
+            "New"
+        )
+
         self.customer_df = customer
-        
-        
-    def rfm_analysis(self):
-        
-        self.df = self.df.reset_index()
-        rfm = self.df.groupby("Customer").agg(
-            recency=("Date", "max"),
-            frequency=("Date", "count"),
-            monetary=("Revenue", "sum")
-        )
-    
-        # recency convert to days
-        rfm["recency"] = (self.df["Date"].max() - rfm["recency"]).dt.days
-    
-        # bins
-        n_bins = min(5, rfm["recency"].nunique())
-    
-        # scoring
-        rfm["r_score"] = pd.qcut(
-            rfm["recency"].rank(method="first"),
-            q=n_bins,
-            labels=list(range(n_bins, 0, -1))
-        )
-    
-        rfm["f_score"] = pd.qcut(
-            rfm["frequency"].rank(method="first"),
-            q=n_bins,
-            labels=list(range(1, n_bins+1))
-        )
-    
-        rfm["m_score"] = pd.qcut(
-            rfm["monetary"].rank(method="first"),
-            q=n_bins,
-            labels=list(range(1, n_bins+1))
-        )
-    
-        # segmentation
-        def segment(row):
-            r = int(row["r_score"])
-            f = int(row["f_score"])
-        
-            if (r == n_bins) and (f >= n_bins-1):
-               return "Champions"
-            elif (r >= n_bins-1):
-               return "Loyal"
-            elif (r <= 2):
-               return "At Risk"
-            else:
-               return "Lost"
-    
-        rfm["segment"] = rfm.apply(segment, axis=1)
-    
-        print("\nRFM Table:\n", rfm)
-     
-        self.rfm = rfm
-        
-        
-    
-    def plot_rfm_segments(self):
 
-        seg = self.rfm["segment"].value_counts()
+        logger.info("Customer Analysis Completed")
 
-        plt.figure(figsize=(6,4))
-        plt.bar(seg.index, seg.values)
+        print("\nCustomer Analysis:\n", customer.head())
 
-        plt.title("RFM Customer Segments")
-        plt.xlabel("Segment")
-        plt.ylabel("Number of Customers")
- 
-        plt.tight_layout()
-        plt.show()
-        
-    
-    def plot_clv_top_customers(self):
+    # ---------------------------------------------------
+    # EXPORT CLEAN DATA
+    # ---------------------------------------------------
 
-        top = self.customer_df.sort_values("CLV", ascending=False).head(5)
+    def export_clean_data(self):
 
-        plt.figure(figsize=(6,4))
-        plt.bar(top.index.astype(str), top["CLV"])
-        plt.gca().yaxis.set_major_formatter(FuncFormatter(currency_k))
+        self.df.to_csv("cleaned_retail_data.csv")
 
-        plt.title("Top 5 Customers by CLV")
-        plt.xlabel("Customer ID")
-        plt.ylabel("CLV")
+        logger.info("Cleaned Dataset Exported Successfully")
 
-        plt.tight_layout()
-        plt.show()
-    
-    
-    def plot_rfm_scores(self):
 
-        fig, ax = plt.subplots(1,3, figsize=(10,3))
+# ---------------------------------------------------
+# MAIN
+# ---------------------------------------------------
 
-        ax[0].hist(self.rfm["recency"])
-        ax[0].set_title("Recency")
-
-        ax[1].hist(self.rfm["frequency"])
-        ax[1].set_title("Frequency")
-
-        ax[2].hist(self.rfm["monetary"])
-        ax[2].set_title("Monetary")
-        ax[2].xaxis.set_major_formatter(FuncFormatter(currency_k))
-
-        plt.tight_layout()
-        plt.show()
-       
-       
-    
 if __name__ == "__main__":
-    # -------------------------
-    # Sample Data
-    # -------------------------
-    data = {
-        "Date": pd.date_range("2024-01-01", periods=150, freq="D"),
-        "Customer": np.random.randint(1, 30, 150),
-        "Store": np.random.choice(["North", "South", "East", "West"], 150),
-        "Region": np.random.choice(["Urban", "Rural"], 150),
-        "Product": np.random.choice(["Laptop", "Mobile", "Tablet", "Accessories"], 150),
-        "Units_Sold": np.random.randint(1, 40, 150),
-        "Price": np.random.choice([100, 200, 400, 800], 150),
-        "Cost": np.random.choice([60, 120, 300, 500], 150)
-    }
 
-    dashboard = RetailAnalyticsDashboard(data)
+    logger.info("Project Started")
 
-    # -------------------------
-    # Basic & Professional EDA
-    # -------------------------
-    print("\n=== Basic EDA ===")
+    dashboard = RetailAnalyticsDashboard("advanced_retail_dataset_2024.csv")
+
+    # EDA
     dashboard.basic_eda()
 
-    print("\n=== Professional EDA ===")
-    prof_eda = dashboard.professional_eda()
-    for k, v in prof_eda.items():
-        print(f"\n{k}:\n{v}")
+    # Cleaning
+    dashboard.data_cleaning()
 
-    # -------------------------
-    # Clean Data
-    # -------------------------
-    dashboard.data_cleaning(drop_invalid_price=True)
+    # KPI
+    print("\n=== KPI DASHBOARD ===")
 
-    # -------------------------
-    # KPI Dashboard
-    # -------------------------
-    print("\n=== KPI Dashboard ===")
     kpis = dashboard.generate_kpi_dashboard
+
     for k, v in kpis.items():
         print(f"{k}: {v}")
 
-    # -------------------------
-    # Time Series & Trend
-    # -------------------------
-    print("\n=== Time Series Trend ===")
-    daily, rolling, monthly = dashboard.time_series_analysis()
-    print("Trend Direction:", dashboard.trend_direction())
+    # Trend
+    print("\nTrend Direction:", dashboard.trend_direction())
 
-    # -------------------------
     # Visualizations
-    # -------------------------
-    print("\n=== Visualizations ===")
-    dashboard.daily_rolling_plot()
-    dashboard.store_revenue_plot()
-    dashboard.product_revenue_plot()
-    dashboard.profit_margin_histogram()
-    dashboard.monthly_revenue_plot()
-    dashboard.weekend_vs_weekday_plot()
-    
-    
+    dashboard.revenue_trend_plot()
+
+    dashboard.region_revenue_plot()
+
+    dashboard.top_categories_plot()
+
+    # Customer Analysis
     dashboard.customer_analysis()
-    dashboard.rfm_analysis()
-    
-    
-    dashboard.plot_rfm_segments()
-    dashboard.plot_clv_top_customers()
-    dashboard.plot_rfm_scores()
 
+    # Export Clean Data
+    dashboard.export_clean_data()
 
-    # -------------------------
-    # Advanced Grouping Insights
-    # -------------------------
-    print("\n=== Advanced Grouping Insights ===")
-    adv_insights = dashboard.advanced_grouping_insights()
-    for k, v in adv_insights.items():
-        print(f"\n{k}:\n{v}")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        
-        
+    logger.info("Project Completed Successfully")

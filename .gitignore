@@ -18,3 +18,4 @@ logs/
 .vscode/
 .idea/
 tempCodeRunnerFile.py
+*.save

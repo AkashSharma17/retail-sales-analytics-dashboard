@@ -12,16 +12,20 @@ from src.config import Config
 logger = logging.getLogger(__name__)
 
 
+
 def format_pkr(value, pos=None):
-    """Format numbers as PKR with K/L/Cr suffix"""
-    if value >= 10_000_000:
-        return f'Rs.{value/10_000_000:.1f}Cr'
-    elif value >= 100_000:
-        return f'Rs.{value/100_000:.1f}L'
-    elif value >= 1000:
-        return f'Rs.{value/1000:.0f}K'
+    """Format PKR using international K/M/B notation"""
+    value = float(value)
+
+    if abs(value) >= 1_000_000_000:
+        return f'Rs. {value / 1_000_000_000:.2f}B'
+    elif abs(value) >= 1_000_000:
+        return f'Rs. {value / 1_000_000:.2f}M'
+    elif abs(value) >= 1_000:
+        return f'Rs. {value / 1_000:.2f}K'
     else:
-        return f'Rs.{value:.0f}'
+        return f'Rs. {value:,.2f}'
+
 
 
 class Visualizer:
